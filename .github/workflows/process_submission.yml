@@ -2,9 +2,7 @@ name: Process Submission
 
 on:
   pull_request_target:
-    paths:
-      - 'submissions/inbox/**'
-  workflow_dispatch:
+
 
 
 permissions:
