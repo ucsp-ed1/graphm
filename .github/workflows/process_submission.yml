@@ -4,21 +4,20 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
     paths:
-      - 'submissions/**'
+      - 'submissions/**.enc'
 
 permissions:
   contents: write
 
 jobs:
-  process-merged-file:
-    # CHANGE 2: Remove the "if merged" check (Push implies merge)
+  process-submission:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Repository
+      - name: Checkout Base (Main)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          ref: ${{ github.event.pull_request.base.ref }} # Get scripts from main
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,23 +29,36 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Find and Process Submission
+      - name: Identify PR Files
+        id: find_files
+        run: |
+          # Fetch the PR branch so we can diff against it
+          git fetch origin pull/${{ github.event.pull_request.number }}/head:pr_branch
+          
+          # Get list of files changed in the PR vs the base branch
+          CHANGED_FILES=$(git diff --name-only main pr_branch | grep 'submissions/.*\.enc$' || true)
+          echo "files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+          
+          # Actually checkout the PR files into the submissions folder 
+          # so the script can read them
+          git checkout pr_branch -- submissions/
+
+      - name: Process and Score
         env:
           SUBMISSION_PRIVATE_KEY: ${{ secrets.SUBMISSION_PRIVATE_KEY }}
           TEST_LABELS_CSV: ${{ secrets.TEST_LABELS_CSV }}
+          CHANGED_FILES: ${{ steps.find_files.outputs.files }}
         run: |
-          # Get list of new .enc files in submissions/
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep 'submissions/.*\.enc$' || true)
-          export CHANGED_FILES
           python .github/scripts/process_submission.py
-          
 
-      - name: Commit and Push Changes
+      - name: Commit Leaderboard Update
         run: |
           git config user.name "SubmissionBot"
           git config user.email "bot@noreply.github.com"
-          git add .
+          git add leaderboard.csv submissions/ # Adding the decrypted CSVs if you want them saved
           
-          git commit -m "Processed new submission [skip ci]"
-          git push
-
+          # Only commit if something actually changed
+          if ! git diff --cached --quiet; then
+            git commit -m "Update leaderboard from PR #${{ github.event.pull_request.number }}"
+            git push origin HEAD:${{ github.event.pull_request.base.ref }}
+          fi
